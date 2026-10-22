@@ -92,7 +92,13 @@ func PCRExtend(pcr int, data []byte) error {
 		PropertyCount: 1,
 	}.Execute(t)
 	if err != nil {
-		log.Printf("TPM device is not a TPM 2.0, skipping PCR extension")
+		var rc tpm2.TPMRC
+
+		if errors.As(err, &rc) {
+			log.Printf("TPM device is not a TPM 2.0, skipping PCR extension: %v (response code 0x%x)", err, uint32(rc))
+		} else {
+			log.Printf("TPM device is not a TPM 2.0, skipping PCR extension: %v", err)
+		}
 
 		return nil
 	}

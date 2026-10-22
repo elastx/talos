@@ -43,7 +43,13 @@ func TPMSeed() error {
 		PropertyCount: 1,
 	}.Execute(t)
 	if err != nil {
-		log.Printf("TPM device is not a TPM 2.0, skipping seeding entropy pool from TPM")
+		var rc tpm2.TPMRC
+
+		if errors.As(err, &rc) {
+			log.Printf("TPM device is not a TPM 2.0, skipping seeding entropy pool from TPM: %v (response code 0x%x)", err, uint32(rc))
+		} else {
+			log.Printf("TPM device is not a TPM 2.0, skipping seeding entropy pool from TPM: %v", err)
+		}
 
 		return nil
 	}
