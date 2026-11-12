@@ -217,6 +217,7 @@ func TestVirtualMachineConfigMarshalUnmarshal(t *testing.T) {
 					{
 						InterfaceName: "net1",
 						InterfaceLink: "eth1",
+						InterfaceMode: hypervisorhelpers.VirtualMachineInterfaceModeBridge,
 					},
 				}
 
@@ -947,6 +948,28 @@ func TestVirtualMachineConfigValidate(t *testing.T) {
 			},
 
 			expectedErrors: "networking.interfaces[0]: link is required",
+		},
+		{
+			name: "bridged interface",
+			cfg: func() *hypervisor.VirtualMachineConfigV1Alpha1 {
+				c := validVirtualMachineConfig()
+				c.NetworkingConfig.InterfacesConfig = []hypervisor.VirtualMachineInterface{linkInterface("net0")}
+				c.NetworkingConfig.InterfacesConfig[0].InterfaceMode = hypervisorhelpers.VirtualMachineInterfaceModeBridge
+
+				return c
+			},
+		},
+		{
+			name: "interface mode outside the enum",
+			cfg: func() *hypervisor.VirtualMachineConfigV1Alpha1 {
+				c := validVirtualMachineConfig()
+				c.NetworkingConfig.InterfacesConfig = []hypervisor.VirtualMachineInterface{linkInterface("net0")}
+				c.NetworkingConfig.InterfacesConfig[0].InterfaceMode = hypervisorhelpers.VirtualMachineInterfaceMode(99)
+
+				return c
+			},
+
+			expectedErrors: `networking.interfaces[0]: unsupported interface mode "VirtualMachineInterfaceMode(99)"`,
 		},
 		{
 			name: "multicast hardware address",

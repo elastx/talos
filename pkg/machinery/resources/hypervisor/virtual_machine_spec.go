@@ -90,6 +90,8 @@ type VirtualMachineInterfaceSpec struct {
 	//
 	// Empty when it is to be derived from the virtual machine and interface names.
 	HardwareAddr string `yaml:"hardwareAddr,omitempty" protobuf:"3"`
+	// Mode of the attachment to the host link, with the default (`direct`) applied.
+	Mode string `yaml:"mode,omitempty" protobuf:"4"`
 }
 
 // VirtualMachineFirmwareSpec describes firmware selection without host firmware paths.

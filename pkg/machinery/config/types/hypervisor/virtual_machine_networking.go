@@ -55,11 +55,28 @@ type VirtualMachineInterface struct {
 	//     Kernel name (or alias) of the host link the interface is attached to.
 	//
 	//     The link must already exist on the host and be an Ethernet link, e.g. a physical
-	//     interface, a bond, or a VLAN. It is attached to as is.
+	//     interface, a bond, or a VLAN — in `bridge` mode the link must be a bridge. It is
+	//     attached to as is.
 	//   examples:
 	//     - value: '"eth0"'
 	//   schemaRequired: true
 	InterfaceLink string `yaml:"link"`
+	//   description: |
+	//     Mode of the attachment to the host link.
+	//
+	//     `direct` attaches the interface through a macvtap device on the link: guests sharing a
+	//     host link reach each other, but IPv6 multicast — neighbour discovery, router
+	//     advertisements, DHCPv6 — does not reach the guest through the host-side device.
+	//
+	//     `bridge` expects the link to be a bridge, and attaches the interface through a tap
+	//     interface enslaved into that bridge: the guest becomes a regular bridge port, so
+	//     multicast traffic reaches it like it reaches any other port.
+	//
+	//     Optional; defaults to `direct`.
+	//   values:
+	//     - direct
+	//     - bridge
+	InterfaceMode hypervisorhelpers.VirtualMachineInterfaceMode `yaml:"mode,omitempty"`
 	//   description: |
 	//     Hardware (MAC) address presented to the guest.
 	//
@@ -103,6 +120,15 @@ func (i *VirtualMachineInterface) Link() string {
 	return i.InterfaceLink
 }
 
+// Mode implements config.VirtualMachineInterfaceConfig interface.
+func (i *VirtualMachineInterface) Mode() hypervisorhelpers.VirtualMachineInterfaceMode {
+	if i.InterfaceMode == hypervisorhelpers.VirtualMachineInterfaceModeUnknown {
+		return hypervisorhelpers.VirtualMachineInterfaceModeDirect
+	}
+
+	return i.InterfaceMode
+}
+
 // HardwareAddress implements config.VirtualMachineInterfaceConfig interface.
 func (i *VirtualMachineInterface) HardwareAddress() net.HardwareAddr {
 	return net.HardwareAddr(i.HardwareAddressConfig)
@@ -117,6 +143,12 @@ func (i *VirtualMachineInterface) Validate(index int) (string, error) {
 	}
 
 	validationErrors = errors.Join(validationErrors, validateLink(index, i.InterfaceLink))
+
+	if !i.InterfaceMode.IsAVirtualMachineInterfaceMode() {
+		validationErrors = errors.Join(validationErrors,
+			fmt.Errorf("networking.interfaces[%d]: unsupported interface mode %q", index, i.InterfaceMode))
+	}
+
 	validationErrors = errors.Join(validationErrors, validateHardwareAddress(index, net.HardwareAddr(i.HardwareAddressConfig)))
 
 	return i.InterfaceName, validationErrors

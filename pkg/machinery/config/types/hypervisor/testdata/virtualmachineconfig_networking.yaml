@@ -14,3 +14,4 @@ networking:
           link: eth0
         - name: net1
           link: eth1
+          mode: bridge

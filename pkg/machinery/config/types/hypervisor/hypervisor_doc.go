@@ -823,8 +823,19 @@ func (VirtualMachineInterface) Doc() *encoder.Doc {
 				Name:        "link",
 				Type:        "string",
 				Note:        "",
-				Description: "Kernel name (or alias) of the host link the interface is attached to.\n\nThe link must already exist on the host and be an Ethernet link, e.g. a physical\ninterface, a bond, or a VLAN. It is attached to as is.",
+				Description: "Kernel name (or alias) of the host link the interface is attached to.\n\nThe link must already exist on the host and be an Ethernet link, e.g. a physical\ninterface, a bond, or a VLAN — in `bridge` mode the link must be a bridge. It is\nattached to as is.",
 				Comments:    [3]string{"" /* encoder.HeadComment */, "Kernel name (or alias) of the host link the interface is attached to." /* encoder.LineComment */, "" /* encoder.FootComment */},
+			},
+			{
+				Name:        "mode",
+				Type:        "VirtualMachineInterfaceMode",
+				Note:        "",
+				Description: "Mode of the attachment to the host link.\n\n`direct` attaches the interface through a macvtap device on the link: guests sharing a\nhost link reach each other, but IPv6 multicast — neighbour discovery, router\nadvertisements, DHCPv6 — does not reach the guest through the host-side device.\n\n`bridge` expects the link to be a bridge, and attaches the interface through a tap\ninterface enslaved into that bridge: the guest becomes a regular bridge port, so\nmulticast traffic reaches it like it reaches any other port.\n\nOptional; defaults to `direct`.",
+				Comments:    [3]string{"" /* encoder.HeadComment */, "Mode of the attachment to the host link." /* encoder.LineComment */, "" /* encoder.FootComment */},
+				Values: []string{
+					"direct",
+					"bridge",
+				},
 			},
 			{
 				Name:        "hardwareAddr",
@@ -838,7 +849,7 @@ func (VirtualMachineInterface) Doc() *encoder.Doc {
 
 	doc.Fields[0].AddExample("", "net0")
 	doc.Fields[1].AddExample("", "eth0")
-	doc.Fields[2].AddExample("", "52:54:00:12:34:56")
+	doc.Fields[3].AddExample("", "52:54:00:12:34:56")
 
 	return doc
 }

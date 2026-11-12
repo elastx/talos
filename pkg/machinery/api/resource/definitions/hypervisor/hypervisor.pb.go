@@ -1441,7 +1441,9 @@ type VirtualMachineInterfaceSpec struct {
 	// HardwareAddr is the address presented to the guest.
 	//
 	// Empty when it is to be derived from the virtual machine and interface names.
-	HardwareAddr  string `protobuf:"bytes,3,opt,name=hardware_addr,json=hardwareAddr,proto3" json:"hardware_addr,omitempty"`
+	HardwareAddr string `protobuf:"bytes,3,opt,name=hardware_addr,json=hardwareAddr,proto3" json:"hardware_addr,omitempty"`
+	// Mode of the attachment to the host link, with the default (`direct`) applied.
+	Mode          string `protobuf:"bytes,4,opt,name=mode,proto3" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1493,6 +1495,13 @@ func (x *VirtualMachineInterfaceSpec) GetLink() string {
 func (x *VirtualMachineInterfaceSpec) GetHardwareAddr() string {
 	if x != nil {
 		return x.HardwareAddr
+	}
+	return ""
+}
+
+func (x *VirtualMachineInterfaceSpec) GetMode() string {
+	if x != nil {
+		return x.Mode
 	}
 	return ""
 }
@@ -2342,11 +2351,12 @@ const file_resource_definitions_hypervisor_hypervisor_proto_rawDesc = "" +
 	"\rhardware_addr\x18\x02 \x01(\tR\fhardwareAddr\x126\n" +
 	"\fip_addresses\x18\x03 \x03(\v2\x13.common.NetIPPrefixR\vipAddresses\"o\n" +
 	"\x17VirtualMachineGuestSpec\x12T\n" +
-	"\x05agent\x18\x01 \x01(\v2>.talos.resource.definitions.hypervisor.VirtualMachineAgentSpecR\x05agent\"j\n" +
+	"\x05agent\x18\x01 \x01(\v2>.talos.resource.definitions.hypervisor.VirtualMachineAgentSpecR\x05agent\"~\n" +
 	"\x1bVirtualMachineInterfaceSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04link\x18\x02 \x01(\tR\x04link\x12#\n" +
-	"\rhardware_addr\x18\x03 \x01(\tR\fhardwareAddr\">\n" +
+	"\rhardware_addr\x18\x03 \x01(\tR\fhardwareAddr\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\tR\x04mode\">\n" +
 	"\"VirtualMachineMemoryBallooningSpec\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"H\n" +
 	"\x1cVirtualMachineMemoryNUMASpec\x12\x12\n" +

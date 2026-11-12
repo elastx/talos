@@ -217,6 +217,8 @@ type VirtualMachineInterfaceConfig interface {
 	Name() string
 	// Link is the kernel name of the host link the interface is attached to.
 	Link() string
+	// Mode of the attachment to the host link, with the default applied.
+	Mode() hypervisorhelpers.VirtualMachineInterfaceMode
 	// HardwareAddress is the address presented to the guest, empty when it is to be derived.
 	HardwareAddress() net.HardwareAddr
 }

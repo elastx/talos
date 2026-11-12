@@ -7,6 +7,7 @@ package hypervisor
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -991,6 +992,14 @@ var errLinkNotFound = errors.New("host link not found")
 // errLinkNotEthernet marks a host link that exists but cannot carry a macvtap.
 var errLinkNotEthernet = errors.New("host link is not an Ethernet link")
 
+// errLinkNotBridge marks a host link that exists but is not a bridge, and so cannot accept an
+// enslaved tap a bridged interface is attached through.
+var errLinkNotBridge = errors.New("host link is not a bridge")
+
+// errInterfaceModeUnsupported marks an interface mode no render can carry: it can only come from
+// a spec authored by another producer, since the configuration validates its own modes.
+var errInterfaceModeUnsupported = errors.New("interface mode not supported")
+
 // errDiskNotReady marks a render waiting on a disk that has not been resolved or provisioned yet.
 var errDiskNotReady = errors.New("not ready")
 
@@ -1003,52 +1012,93 @@ var errDiskUnsupported = errors.New("unsupported disk")
 // cannot satisfy is a permanent obstacle to report, but still no reason to restart the controller.
 func isHeldBack(err error) bool {
 	return errors.Is(err, errLinkNotFound) || errors.Is(err, errLinkNotEthernet) ||
+		errors.Is(err, errLinkNotBridge) || errors.Is(err, errInterfaceModeUnsupported) ||
 		errors.Is(err, errDiskNotReady) || errors.Is(err, errDiskUnsupported) || errors.Is(err, vmprofile.ErrNotReady)
 }
 
 // hostLinks carries what an interface needs to know about the host's links: how to resolve a
-// name or alias, and whether what it resolves to can carry a macvtap.
+// name or alias, and whether what it resolves to can carry a macvtap or accept an enslaved tap.
 type hostLinks struct {
 	resolver *network.LinkResolver
 	types    map[string]nethelpers.LinkType
+	kinds    map[string]string
 }
 
 // newHostLinks indexes the observed host links for interface resolution.
 func newHostLinks(links safe.List[*network.LinkStatus]) hostLinks {
 	types := make(map[string]nethelpers.LinkType, links.Len())
+	kinds := make(map[string]string, links.Len())
 
 	for link := range links.All() {
 		types[link.Metadata().ID()] = link.TypedSpec().Type
+		kinds[link.Metadata().ID()] = link.TypedSpec().Kind
 	}
 
 	return hostLinks{
 		resolver: network.NewLinkResolver(links.All),
 		types:    types,
+		kinds:    kinds,
 	}
 }
 
+// interfaceMode parses the attachment mode of an interface, defaulting an omitted mode to what
+// configurations written before the mode existed spelled by implication: a direct macvtap.
+func interfaceMode(mode string) (hypervisorhelpers.VirtualMachineInterfaceMode, error) {
+	if mode == "" {
+		return hypervisorhelpers.VirtualMachineInterfaceModeDirect, nil
+	}
+
+	parsed, err := hypervisorhelpers.VirtualMachineInterfaceModeString(mode)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q", errInterfaceModeUnsupported, mode)
+	}
+
+	return parsed, nil
+}
+
+// resolvedInterface pins a virtual machine interface to the host link it attaches through, once
+// the link has been resolved and its mode known.
+type resolvedInterface struct {
+	link string
+	mode hypervisorhelpers.VirtualMachineInterfaceMode
+}
+
 // resolveInterfaceLinks resolves the host link of each interface, in order. It fails on the
-// first link the host does not have, or has but cannot attach a macvtap to: rendering fewer
+// first link the host does not have, or has but cannot attach the interface to: rendering fewer
 // interfaces than requested would silently alter the VM definition, so the whole render fails
 // and VirtualMachineDomainSpecController withdraws the power intent.
 //
 // VirtualMachineStatusController renders the same spec to report the obstacle.
-func resolveInterfaceLinks(name string, interfaces []hypervisor.VirtualMachineInterfaceSpec, links hostLinks) ([]string, error) {
-	resolved := make([]string, 0, len(interfaces))
+func resolveInterfaceLinks(name string, interfaces []hypervisor.VirtualMachineInterfaceSpec, links hostLinks) ([]resolvedInterface, error) {
+	resolved := make([]resolvedInterface, 0, len(interfaces))
 
 	for _, iface := range interfaces {
+		mode, err := interfaceMode(iface.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("virtual machine %q: interface %q: %w", name, iface.Name, err)
+		}
+
 		link, ok := links.resolver.ResolveChecked(iface.Link)
 		if !ok {
 			return nil, fmt.Errorf("virtual machine %q: interface %q: %w: %q", name, iface.Name, errLinkNotFound, iface.Link)
 		}
 
-		// Only the type is checked, not the kind: a bond or a VLAN is as good a macvtap lower
-		// link as a physical interface, while a loopback or an L3 tunnel is not one at all.
-		if links.types[link] != nethelpers.LinkEther {
-			return nil, fmt.Errorf("virtual machine %q: interface %q: %w: %q", name, iface.Name, errLinkNotEthernet, iface.Link)
+		switch mode {
+		case hypervisorhelpers.VirtualMachineInterfaceModeBridge:
+			// The interface is enslaved into the named link as a tap port, which only a bridge
+			// accepts; nothing else on the host serves as one, so a domain start would only fail.
+			if links.kinds[link] != network.LinkKindBridge {
+				return nil, fmt.Errorf("virtual machine %q: interface %q: %w: %q", name, iface.Name, errLinkNotBridge, iface.Link)
+			}
+		default:
+			// Only the type is checked, not the kind: a bond or a VLAN is as good a macvtap lower
+			// link as a physical interface, while a loopback or an L3 tunnel is not one at all.
+			if links.types[link] != nethelpers.LinkEther {
+				return nil, fmt.Errorf("virtual machine %q: interface %q: %w: %q", name, iface.Name, errLinkNotEthernet, iface.Link)
+			}
 		}
 
-		resolved = append(resolved, link)
+		resolved = append(resolved, resolvedInterface{link: link, mode: mode})
 	}
 
 	return resolved, nil
@@ -1063,24 +1113,48 @@ func renderVirtualMachineInterfaces(name string, interfaces []hypervisor.Virtual
 	var result []libvirtxml.DomainInterface
 
 	for i, iface := range interfaces {
+		var source *libvirtxml.DomainInterfaceSource
+
+		var target *libvirtxml.DomainInterfaceTarget
+
+		if resolved[i].mode == hypervisorhelpers.VirtualMachineInterfaceModeBridge {
+			// The interface is enslaved into the bridge named by the configuration as a tap
+			// port: the guest becomes a regular bridge port, and multicast traffic such as
+			// IPv6 neighbour discovery reaches it without a filter in the way.
+			source = &libvirtxml.DomainInterfaceSource{
+				Bridge: &libvirtxml.DomainInterfaceSourceBridge{
+					Bridge: resolved[i].link,
+				},
+			}
+
+			// The tap carrying the interface is named after the virtual machine and the
+			// interface, so the port a bridge shows is attributable to the guest it belongs to.
+			target = &libvirtxml.DomainInterfaceTarget{
+				Dev: interfaceTapName(name, iface.Name),
+			}
+		} else {
+			// A macvtap in bridge mode lets guests on the same lower link reach each other, and
+			// a host macvlan in bridge mode on the same parent reach the guest. The lower link's
+			// own address cannot: macvtap traffic never loops back to its parent.
+			source = &libvirtxml.DomainInterfaceSource{
+				Direct: &libvirtxml.DomainInterfaceSourceDirect{
+					Dev:  resolved[i].link,
+					Mode: "bridge",
+				},
+			}
+		}
+
 		result = append(result, libvirtxml.DomainInterface{
 			MAC: &libvirtxml.DomainInterfaceMAC{
 				Address: interfaceHardwareAddr(name, iface),
 			},
-			// A macvtap in bridge mode lets guests on the same lower link reach each other, and
-			// a host macvlan in bridge mode on the same parent reach the guest. The lower link's
-			// own address cannot: macvtap traffic never loops back to its parent.
-			Source: &libvirtxml.DomainInterfaceSource{
-				Direct: &libvirtxml.DomainInterfaceSourceDirect{
-					Dev:  resolved[i],
-					Mode: "bridge",
-				},
-			},
+			Source: source,
+			Target: target,
 			Model: &libvirtxml.DomainInterfaceModel{
 				Type: "virtio",
 			},
 			// The user alias carries the configured interface name onto the device, so it can be
-			// addressed without depending on the generated macvtap name.
+			// addressed without depending on the generated host-side interface name.
 			Alias: &libvirtxml.DomainAlias{
 				Name: interfaceAliasPrefix + iface.Name,
 			},
@@ -1108,6 +1182,17 @@ func interfaceMAC(vmName, ifaceName string) string {
 	sum := sha256.Sum256([]byte(vmName + "\x00" + ifaceName))
 
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
+}
+
+// interfaceTapName derives a stable name for the tap interface a bridged guest interface is
+// carried through: the tap lives only while the domain runs, but the steady name keeps a bridge
+// port attributable to the virtual machine it belongs to.
+func interfaceTapName(vmName, ifaceName string) string {
+	sum := sha256.Sum256([]byte(vmName + "\x00" + ifaceName))
+
+	// "tap" plus half the digest: thirteen characters, within the kernel's fifteen, with
+	// enough bits against collisions between virtual machines and their interfaces.
+	return "tap" + hex.EncodeToString(sum[:5])
 }
 
 func validateVirtualMachineInterfaces(name string, interfaces []hypervisor.VirtualMachineInterfaceSpec) error {

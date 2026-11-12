@@ -38,6 +38,12 @@
 (call protected_device_f (tap_device_t))
 (filecon "/dev/tap[0-9]+" char (system_u object_r tap_device_t (systemLow systemLow)))
 
+; tap character devices libvirt creates over /dev/net/tun, one per guest
+; interface enslaved into a host bridge. The same type as the macvtap devices
+; serves: both are tap fds the guest inherits from libvirtd, the entry exists
+; for the same reason, and a miss there is fatal to domain start as well.
+(filecon "/dev/net/tun" char (system_u object_r tap_device_t (systemLow systemLow)))
+
 ; libvirtd opens the device while it is still device_t and relabels the fd.
 (allow init_t device_t (chr_file (relabelfrom)))
 (allow init_t tap_device_t (chr_file (relabelto)))

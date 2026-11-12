@@ -304,7 +304,7 @@ func (suite *VirtualMachineProjectionSuite) TestProjectsRequiredAndOptionalInten
 	}
 	doc.NetworkingConfig.InterfacesConfig = []hypervisorcfg.VirtualMachineInterface{
 		{InterfaceName: "net0", InterfaceLink: "eth0"},
-		{InterfaceName: "net1", InterfaceLink: "uplink"},
+		{InterfaceName: "net1", InterfaceLink: "uplink", InterfaceMode: hypervisorhelpers.VirtualMachineInterfaceModeBridge},
 	}
 	cfg, err := container.New(doc)
 	suite.Require().NoError(err)
@@ -352,8 +352,8 @@ func (suite *VirtualMachineProjectionSuite) TestProjectsRequiredAndOptionalInten
 				},
 			},
 			Interfaces: []hypervisor.VirtualMachineInterfaceSpec{
-				{Name: "net0", Link: "eth0"},
-				{Name: "net1", Link: "uplink"},
+				{Name: "net0", Link: "eth0", Mode: "direct"},
+				{Name: "net1", Link: "uplink", Mode: "bridge"},
 			},
 			Guest: hypervisor.VirtualMachineGuestSpec{
 				Agent: hypervisor.VirtualMachineAgentSpec{Enabled: true},
@@ -1009,6 +1009,74 @@ func (suite *VirtualMachineSpecSuite) createLinkOfType(id, alias string, linkTyp
 	link.TypedSpec().Type = linkType
 	link.TypedSpec().Alias = alias
 	suite.Create(link)
+}
+
+// createBridgeLink adds a host link that carries the kind a bridged interface attaches through.
+func (suite *VirtualMachineSpecSuite) createBridgeLink(id, alias string) {
+	link := network.NewLinkStatus(network.NamespaceName, id)
+	link.TypedSpec().Type = nethelpers.LinkEther
+	link.TypedSpec().Kind = network.LinkKindBridge
+	link.TypedSpec().Alias = alias
+	suite.Create(link)
+}
+
+// A bridged interface is enslaved into the named bridge as a tap port, so the guest is a
+// regular bridge port; the fixture pins the tap the interface is carried through, and the
+// direct interface beside it shows the tap is what the mode, not the MAC or the alias, chose.
+func (suite *VirtualMachineSpecSuite) TestBridgedInterfaceAttachesThroughBridge() {
+	suite.createBridgeLink("br0", "")
+	suite.createLink("eth0", "")
+
+	doc := newVirtualMachine("bridged")
+	doc.NetworkingConfig.InterfacesConfig = []hypervisorcfg.VirtualMachineInterface{
+		{InterfaceName: "net0", InterfaceLink: "br0", InterfaceMode: hypervisorhelpers.VirtualMachineInterfaceModeBridge},
+		{InterfaceName: "net1", InterfaceLink: "eth0"},
+	}
+	cfg, err := container.New(doc)
+	suite.Require().NoError(err)
+	suite.Create(config.NewMachineConfig(cfg))
+
+	suite.assertDomain(doc.Name(), "bridged")
+}
+
+// A bridged interface is enslaved into the named link, and only a bridge accepts an enslaved
+// tap: attaching to anything else would fail at domain start, on the wrong device.
+func (suite *VirtualMachineSpecSuite) TestBridgedInterfaceNeedsBridgeLink() {
+	suite.logs.TakeAll()
+	suite.createLink("eth0", "")
+
+	doc := newVirtualMachine("bridged-not-a-bridge")
+	doc.NetworkingConfig.InterfacesConfig = []hypervisorcfg.VirtualMachineInterface{
+		{InterfaceName: "net0", InterfaceLink: "eth0", InterfaceMode: hypervisorhelpers.VirtualMachineInterfaceModeBridge},
+	}
+	cfg, err := container.New(doc)
+	suite.Require().NoError(err)
+	suite.Create(config.NewMachineConfig(cfg))
+
+	suite.assertWaitingForLink(`virtual machine "bridged-not-a-bridge": interface "net0": host link is not a bridge: "eth0"`)
+	ctest.AssertNoResource[*hypervisor.VirtualMachineDomainSpec](suite, doc.Name())
+}
+
+// A mode no render can carry comes only from a spec another producer authored, the
+// configuration validating its own modes; nothing waits for it to become renderable.
+func (suite *VirtualMachineSpecSuite) TestUnsupportedInterfaceModeIsRejected() {
+	suite.logs.TakeAll()
+	suite.createLink("eth0", "")
+
+	spec := hypervisor.NewVirtualMachineSpec(hypervisor.NamespaceName, "unsupported-mode")
+	*spec.TypedSpec() = hypervisor.VirtualMachineSpecSpec{
+		CPU:        hypervisor.VirtualMachineCPUSpec{Count: 1},
+		Memory:     hypervisor.VirtualMachineMemorySpec{Size: 1 << 30},
+		PowerState: "running",
+		Firmware:   hypervisor.VirtualMachineFirmwareSpec{Type: "uefi"},
+		Interfaces: []hypervisor.VirtualMachineInterfaceSpec{
+			{Name: "net0", Link: "eth0", Mode: "nonsense"},
+		},
+	}
+	suite.Create(spec)
+
+	suite.assertWaitingForLink(`virtual machine "unsupported-mode": interface "net0": interface mode not supported: "nonsense"`)
+	ctest.AssertNoResource[*hypervisor.VirtualMachineDomainSpec](suite, "unsupported-mode")
 }
 
 func (suite *VirtualMachineSpecSuite) TestInterfacesAttachToResolvedLinks() {

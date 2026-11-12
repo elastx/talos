@@ -198,6 +198,7 @@ func projectVirtualMachineSpec(vm configcfg.VirtualMachineConfig) hypervisor.Vir
 			Name:         iface.Name(),
 			Link:         iface.Link(),
 			HardwareAddr: hardwareAddr,
+			Mode:         iface.Mode().String(),
 		})
 	}
 
